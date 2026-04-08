@@ -590,6 +590,80 @@ describe('isAllowedRedirect', () => {
     expect(isAllowedRedirect(allowedOrigins, 'https://www.clerk.com')(url)).toEqual(expected);
     expect(warnMock).toHaveBeenCalledTimes(Number(!expected)); // Number(boolean) evaluates to 0 or 1
   });
+
+  describe('non-default ports', () => {
+    // Local dev servers commonly run on non-standard ports (e.g. :5173, :5174, :5176).
+    // A string pattern like `https://*.example.com` should match
+    // `https://sub.example.com:5173` — the domain is trusted, the port is incidental.
+    // See: https://github.com/clerk/javascript/issues/XXXX
+
+    beforeEach(() => warnMock.mockClear());
+
+    it('allows a wildcard glob pattern to match the same host with a non-default port', () => {
+      expect(isAllowedRedirect(['https://*.clerk.com'], 'https://app.clerk.com')('https://sub.clerk.com:5173/')).toBe(
+        true,
+      );
+    });
+
+    it('allows an exact string origin to match the same host with a non-default port', () => {
+      expect(
+        isAllowedRedirect(['https://sub.clerk.com'], 'https://app.clerk.com')('https://sub.clerk.com:5174/dashboard'),
+      ).toBe(true);
+    });
+
+    it('allows a URL with a non-default port when the pattern has an explicit matching port', () => {
+      expect(
+        isAllowedRedirect(['https://sub.clerk.com:9000'], 'https://app.clerk.com')('https://sub.clerk.com:9000/path'),
+      ).toBe(true);
+    });
+
+    it('rejects a non-default-port URL whose domain does not match the pattern', () => {
+      expect(isAllowedRedirect(['https://*.clerk.com'], 'https://app.clerk.com')('https://evil.com:5173/path')).toBe(
+        false,
+      );
+    });
+
+    it('rejects a subdomain of the wrong domain even when ports are ignored', () => {
+      expect(
+        isAllowedRedirect(['https://*.clerk.com'], 'https://app.clerk.com')('https://sub.evil.com:5173/path'),
+      ).toBe(false);
+    });
+
+    it('rejects a cousin TLD (example.net) that would not match *.example.com', () => {
+      expect(
+        isAllowedRedirect(['https://*.clerk.com'], 'https://app.clerk.com')('https://sub.clerk.net:5173/path'),
+      ).toBe(false);
+    });
+
+    it('allows a RegExp with an optional port group to match', () => {
+      expect(
+        isAllowedRedirect(
+          [/^https:\/\/sub\.clerk\.com(:\d+)?$/],
+          'https://app.clerk.com',
+        )('https://sub.clerk.com:5173/'),
+      ).toBe(true);
+    });
+
+    it('rejects a URL where the RegExp matches neither the full origin nor the portless origin', () => {
+      expect(
+        isAllowedRedirect([/^https:\/\/sub\.clerk\.com$/], 'https://app.clerk.com')('https://evil.com:5173/'),
+      ).toBe(false);
+    });
+
+    it('simulates the real-world case: default wildcard from createAllowedRedirectOrigins matches a dev-port auth passthrough', () => {
+      // createAllowedRedirectOrigins produces `https://*.jurying.net` as one of the defaults.
+      // The auth passthrough runs at https://app.auth.jurying.net:5176 in local dev.
+      // Without the port fix, this match would fail and Clerk would fall back to the
+      // home URL instead of honoring the redirect_url parameter.
+      const defaultPatterns = ['https://jurying.net', 'https://*.jurying.net'];
+      const authPassthroughUrl =
+        'https://app.auth.jurying.net:5176/?target=https%3A%2F%2Fapp.admin.jurying.net%3A5174%2F';
+
+      expect(isAllowedRedirect(defaultPatterns, 'https://intimate-urchin-75.accounts.dev')(authPassthroughUrl)).toBe(
+        true,
+      );
+    });
+  });
 });
 
 describe('createAllowedRedirectOrigins', () => {

@@ -436,12 +436,29 @@ export const isAllowedRedirect =
 
     const isSameOrigin = currentOrigin === url.origin;
 
+    const patterns = allowedRedirectOrigins.map(origin =>
+      typeof origin === 'string' ? globs.toRegexp(trimTrailingSlash(origin)) : origin,
+    );
+
+    // When the redirect URL contains a non-default port (e.g. https://app.example.com:5173),
+    // string-derived glob patterns like `https://*.example.com` fail to match because
+    // glob-to-regexp produces a regex anchored to the end of the string and the port suffix
+    // prevents it from matching. This is a common scenario in local development where dev
+    // servers run on non-standard ports.
+    //
+    // `url.port` is an empty string when the port is the scheme default (443 for https,
+    // 80 for http), so this fallback is only reached in non-standard-port contexts —
+    // typically local dev. The domain must still satisfy the pattern; only the port is
+    // relaxed.
+    const portlessOrigin = url.port ? `${url.protocol}//${url.hostname}` : null;
+
     const isAllowed =
       !isProblematicUrl(url) &&
       (isSameOrigin ||
-        allowedRedirectOrigins
-          .map(origin => (typeof origin === 'string' ? globs.toRegexp(trimTrailingSlash(origin)) : origin))
-          .some(origin => origin.test(trimTrailingSlash(url.origin))));
+        patterns.some(
+          pattern =>
+            pattern.test(trimTrailingSlash(url.origin)) || (portlessOrigin !== null && pattern.test(portlessOrigin)),
+        ));
 
     if (!isAllowed) {
       logger.warnOnce(
